@@ -250,9 +250,7 @@ class Network:
         return dW, db
 
 
-
-
-
+# Utilities
 def cross_entropy(Y_hat, Y):
     """
     Initialize the network with training data and hyperparameters.
