@@ -21,7 +21,7 @@ costs = nn.fit(train_X, train_Y, learning_rate, num_iterations)
 print("test accuracy = %s" % (nn.evaluate(test_X, test_Y)))
 
 # Visualize for a single
-test_image_5 = test_X[4]
-predicted_label_for_one_example = nn.predict(test_image_5)
+test_example_5 = test_X[:,4]
+predicted_label_for_one_example = nn.predict(test_example_5)
 print("For one example, the nn predicted", predicted_label_for_one_example)
 ```
