@@ -88,7 +88,7 @@ class Network:
 
 
     def fit(self, train_X, train_Y, learning_rate, num_iterations,
-            activation = "relu", cost = "cross-entropy"):
+            activation = "relu", cost = "cross-entropy", printing = False):
         """
         Main method for running the gradient descent algo.
 
@@ -101,6 +101,9 @@ class Network:
 
             learning_rate: The learning rate for gradient descent.
             num_iterations: The number of times we go through all training examples.
+            activation = "relu": Use ReLU for *hidden* layer activations.
+            cost = "cross-entropy": Use cross_entropy for loss/cost
+            printing = False: Whether to print training results each iteration.
 
         Returns:
             costs: A Python array of training costs.
@@ -126,7 +129,7 @@ class Network:
             Z, A = self.forward_prop(train_X)
 
             current_cost = self.cost(A[-1], train_Y)
-            print("%sth iter: cost = %s" % (i, current_cost))
+            if printing: print("%sth iter: cost = %s" % (i, current_cost))
             costs.append(current_cost)
 
         return costs
@@ -146,7 +149,7 @@ class Network:
         accuracy = np.average(test_results)
         return accuracy
 
-    def predict(self, X):
+    def predict(self, X, activations_only=False):
         """
         Method for predicting the labels given new features, after training.
 
@@ -159,6 +162,8 @@ class Network:
         """
         Z, A = self.forward_prop(X)
         Y_hat = A[-1]
+        if activations_only:
+            return Y_hat
         predicted_labels = np.rint(Y_hat)
         return predicted_labels
 
