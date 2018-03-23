@@ -160,6 +160,11 @@ class Network:
         Returns:
             predicted_labels: The predicted labels given new features.
         """
+
+        # If there's one example, its shape can be (n,) instead of (n,1).
+        if X.ndim == 1:
+            X = np.expand_dims(X, axis=1)
+
         Z, A = self.forward_prop(X)
         Y_hat = A[-1]
         if activations_only:
