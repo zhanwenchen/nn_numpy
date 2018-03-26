@@ -5,6 +5,10 @@
 # @date March 22, 2018
 # @version 0.1.0
 
+# NOTE: The cost function is cross entropy. Output layer is hard-coded to use
+# sigmoid activation, making its gradient (A-y) iff the cost function is
+# cross entropy.
+
 # Notations
 # ---------
 # For a single neuron in the first layer,
@@ -76,8 +80,8 @@ class Network:
             raise ValueError("Only ReLU activation has been implemented.")
 
         # 4. Set cost function
-        if cost_function == "cross_entropy":
-            self.cost = cross_entropy
+        if cost_function in ["cross_entropy"]:
+            self.cost_function = cost_function
 
         # 5. Initialize weights and biases with randomization method.
         if random_method == "normal":
@@ -88,7 +92,8 @@ class Network:
 
 
     def fit(self, train_X, train_Y, learning_rate, num_iterations,
-            activation = "relu", cost = "cross-entropy", printing = False):
+            regularization = None, l=0, activation = "relu",
+            cost = "cross-entropy", printing = False):
         """
         Main method for running the gradient descent algo.
 
@@ -101,6 +106,7 @@ class Network:
 
             learning_rate: The learning rate for gradient descent.
             num_iterations: The number of times we go through all training examples.
+            l: Lambda - the hyperparameter for L2 Regularization.
             activation = "relu": Use ReLU for *hidden* layer activations.
             cost = "cross-entropy": Use cross_entropy for loss/cost
             printing = False: Whether to print training results each iteration.
@@ -108,6 +114,13 @@ class Network:
         Returns:
             costs: A Python array of training costs.
         """
+
+        if regularization is None and l != 0:
+            raise ValueError("Network.fit: You cannot specify lambda without specifying regularization method!")
+
+        self.l = l
+        if regularization is None or regularization in ["L2"]:
+            self.regularization = regularization
 
         # 1. Forward Propagation with initial weights
         Z, A = self.forward_prop(train_X)
@@ -119,7 +132,7 @@ class Network:
         for i in range(num_iterations):
 
             #1. Backprop
-            dW, db = self.backprop(train_X, train_Y, Z, A)
+            dW, db = self.backprop(train_X, train_Y, Z, A, l)
 
             #3. Update weights and biases for each layer
             self.W = [W_l - learning_rate * dW_l for W_l, dW_l in zip(self.W, dW)]
@@ -212,8 +225,7 @@ class Network:
 
         return Z, A
 
-
-    def backprop(self, train_X, train_Y, Z, A):
+    def backprop(self, train_X, train_Y, Z, A, l):
         """
         Auxillary method for back propagation.
 
@@ -226,6 +238,7 @@ class Network:
 
             Z: A (Python) list of hypothesis by layer, from forward_prop.
             A: A (Python) list of activations by layer, from forward_prop.
+            l: Lambda - the hyperparameter for L2 regularization.
 
         Returns:
             dW: A (Python) list of gradients corresponding to self.W exactly.
@@ -238,27 +251,59 @@ class Network:
 
         if len(self.layers) == 1:
             dZ[0] = A[-1] - train_Y
-            dW[0] = np.dot(dZ[0], train_X.T)/self.m
-            db[0] = np.expand_dims(np.sum(dZ[0], axis=1)/self.m, axis=1)
+            # dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.l * self.W[0] / self.m # REVIEW: W_l divided by m or not?
+            dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.l * self.W[0]
+            db[0] = np.sum(dZ[0], axis=1, keepdims=True) / self.m # REVIEW or np.average(
         else:
             # 2. Calculate the gradients for the last (output) layer
             dZ[-1] = A[-1] - train_Y # NOTE: True iff last layer has sigmoid activation.
-            dW[-1] = np.dot(dZ[-1], A[-1-1].T)/self.m  # (1, 2)
-            db[-1] = np.expand_dims(np.sum(dZ[-1], axis=1)/self.m, axis=1) # REVIEW or np.average()
+            # dW[-1] = np.dot(dZ[-1], A[-1-1].T)/self.m + self.l * self.W[-1] / self.m
+            dW[-1] = np.dot(dZ[-1], A[-1-1].T)/self.m + self.l * self.W[-1]
+            db[-1] = np.sum(dZ[-1], axis=1, keepdims=True) / self.m
 
             # 3. Calculate the gradients for the hidden layers backwards.
             for i in range(-2, -len(self.layers), -1):
                 dZ[i] = np.dot(self.W[i+1].T, dZ[i+1]) * self.sigma_derivative(Z[i])
-                db[i] = np.expand_dims(np.sum(dZ[i], axis=1)/self.m, axis=1)
-                dW[i] = np.dot(dZ[i], A[-i-1].T)/self.m
+                # dW[i] = np.dot(dZ[i], A[-i-1].T)/self.m + self.l * self.W[i] / self.m
+                dW[i] = np.dot(dZ[i], A[-i-1].T)/self.m + self.l * self.W[i]
+                db[i] = np.sum(dZ[i], axis=1, keepdims=True) / self.m
 
             # 4. Calculate the gradients for the first (input) layer
             dZ[0] = np.dot(self.W[1].T, dZ[1]) * self.sigma_derivative(Z[0])
-            db[0] = np.expand_dims(np.sum(dZ[0], axis=1)/self.m, axis=1)
-            dW[0] = np.dot(dZ[0], train_X.T)/self.m
+            # dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.W[0] * self.l / self.m
+            dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.W[0] * self.l
+            db[0] = np.sum(dZ[0], axis=1, keepdims=True) / self.m
 
         return dW, db
 
+    def cost(self, Y_hat, Y):
+        if self.cost_function == "cross_entropy":
+            cost = cross_entropy(Y_hat, Y)
+        if self.regularization in ["L2"]:
+            cost += self.penalty(self.regularization)
+        return cost
+
+
+    def penalty(self, which_norm):
+        """
+        Calculate the sum of norms for all layers using numpy.linalg.norm.
+        """
+
+        if which_norm == "L2":
+            l2_norm = sum([np.linalg.norm(W_l) for W_l in self.W])
+            penalty = self.l * l2_norm / 2.0
+        else:
+            raise ValueError("norm: only L2 norm is implemented right now. You asked for", which_norm)
+
+        return penalty
+
+
+    # def dropout(self, keep_probability):
+    #     """
+    #     Get a mask?
+    #     """
+    #
+    #     mask =
 
 # Utilities
 def cross_entropy(Y_hat, Y):
