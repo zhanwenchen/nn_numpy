@@ -19,11 +19,18 @@
 # WA[-1] + b = Z
 # A = relu(Z);
 
+
+# BUG: Alternatively, instead of implementing dropout in forward_prop,
+#      make it a separate function in the fit function, so that we can reuse
+#      forward_prop results.
+
+# BUG: For dropout, should I accumulate DURING forward_prop (e.g. Z[1] = A[0] * D[0] ...)
+#      or AFTER forward_prop (e.g., A = [A_l * D_l for A_l, D_l in zip(A, D)])?
 __all__ = ['Network']
 
 import numpy as np
 
-np.seterr(all="raise")
+# np.seterr(all="raise")
 
 class Network:
     def __init__(self, train_X, train_Y, num_hidden_layers, layer_width,
@@ -93,7 +100,8 @@ class Network:
 
     def fit(self, train_X, train_Y, learning_rate, num_iterations,
             regularization = None, l=0, activation = "relu",
-            cost = "cross-entropy", printing = False):
+            cost = "cross-entropy", printing = False,
+            dropout=False, keep_prob=1.0):
         """
         Main method for running the gradient descent algo.
 
@@ -125,7 +133,15 @@ class Network:
         # 1. Forward Propagation with initial weights
         Z, A = self.forward_prop(train_X)
 
-        init_cost = self.cost(A[-1], train_Y)
+        if dropout:
+            D = [np.random.binomial([np.ones(A_l.shape)], keep_prob)[0] for A_l in A] # same shape as A_l
+            A_before_dropout = np.copy(A)
+            A = [A_l * D_l / keep_prob for A_l, D_l in zip(A, D)]
+            init_cost = self.cost(A_before_dropout[-1], train_Y)
+        else:
+            # Do not use dropout activations in cost calculation due to zeros.
+            init_cost = self.cost(A[-1], train_Y)
+
         costs = [init_cost]
 
         # 2. Run learning
@@ -141,7 +157,25 @@ class Network:
             #4. Forward Prop with updated weights
             Z, A = self.forward_prop(train_X)
 
-            current_cost = self.cost(A[-1], train_Y)
+            # if dropout:
+            #     A_masked, Mask = self.apply_mask(keep_prob)
+            # NOTE: The problem was probably with cost, because when we are
+            # evaluating, we are using a bunch of zeros in the cost, where
+            # we should be using the real one. So evaluating cost needs to
+            # to use the Z, A
+
+            # Do not use dropout activations in cost calculation due to zeros.
+
+
+            if dropout:
+                D = [np.random.binomial([np.ones(A_l.shape)], keep_prob)[0] for A_l in A] # same shape as A_l
+                A_before_dropout = np.copy(A)
+                A = [A_l * D_l / keep_prob for A_l, D_l in zip(A, D)]
+                current_cost = self.cost(A_before_dropout[-1], train_Y)
+            else:
+                # Do not use dropout activations in cost calculation due to zeros.
+                current_cost = self.cost(A[-1], train_Y)
+
             if printing: print("%sth iter: cost = %s" % (i, current_cost))
             costs.append(current_cost)
 
@@ -192,23 +226,23 @@ class Network:
         Args:
             X: Training, validation, or testing features in column-vector form
                 of shape (num_features, num_examples).
-
         Returns:
-            Z: A (Python) list of hypothesis by layer.
+            Z: A (Python) list of hypotheses by layer.
             A: A (Python) list of activations by layer, corresponding to Z.
 
         Raises:
             ValueError: Raised if train_X, train_Y have incorrect shapes.
         """
         # 1. Initialize hypotheses and activations
-        Z = [np.zeros((len(w[0]), self.m)) for w in self.W]
-        A = [np.zeros((len(w[0]), self.m)) for w in self.W]
+        Z = [np.zeros((len(W_l), self.m)) for W_l in self.W]
+        A = [np.zeros((len(W_l), self.m)) for W_l in self.W]
 
         # 2. Populate all layers
         if len(self.layers) == 1:
             # 2e. Edge Case: if single layer (no hidden layer), then in->out
             Z[0] = np.dot(self.W[0], X) + self.b[0]
             A[0] = sigmoid(Z[0])
+
         else:
             # 2a. Populat input layer
             Z[0] = np.dot(self.W[0], X) + self.b[0]
@@ -225,7 +259,7 @@ class Network:
 
         return Z, A
 
-    def backprop(self, train_X, train_Y, Z, A, l):
+    def backprop(self, train_X, train_Y, Z, A, l, D=None):
         """
         Auxillary method for back propagation.
 
@@ -239,6 +273,7 @@ class Network:
             Z: A (Python) list of hypothesis by layer, from forward_prop.
             A: A (Python) list of activations by layer, from forward_prop.
             l: Lambda - the hyperparameter for L2 regularization.
+            D=None: if not None, use D as the mask.
 
         Returns:
             dW: A (Python) list of gradients corresponding to self.W exactly.
@@ -249,13 +284,25 @@ class Network:
         dW = [np.zeros((num_out, num_in)) for num_in, num_out in self.layers]
         db = [np.zeros((num_out, 1)) for _, num_out in self.layers]
 
+        def dA_sigmoid(A_l):
+            return -train_Y/A_l + (1.0-train_Y)/(1.0-A_l)
+
+        # TODO: REVIEW for sigmoid, dA *= D[i] / keep_prob might be unnecessary?
         if len(self.layers) == 1:
-            dZ[0] = A[-1] - train_Y
+            # dA = dA_sigmoid(A[0])
+            # if D: dA *= D[0] / keep_prob
+            # NOTE: for sigmoid, dA *= D[i] / keep_prob might be unnecessary
+            dZ[0] = A[0] - train_Y
+            # dZ[0] = dA * sigmoid_derivative(Z[0])
             # dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.l * self.W[0] / self.m # REVIEW: W_l divided by m or not?
             dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.l * self.W[0]
             db[0] = np.sum(dZ[0], axis=1, keepdims=True) / self.m # REVIEW or np.average(
         else:
-            # 2. Calculate the gradients for the last (output) layer
+            # 2. Calculate the gradientor the last (output) layer
+            # dA = dA_sigmoid(A[-1])
+            # NOTE: for sigmoid, dA *= Di] / keep_prob might be unnecessary
+            # if D: dA *= D[-1] / keep_prob
+            # dZ[-1] = dA * self.sigma_derivative(Z[-1])
             dZ[-1] = A[-1] - train_Y # NOTE: True iff last layer has sigmoid activation.
             # dW[-1] = np.dot(dZ[-1], A[-1-1].T)/self.m + self.l * self.W[-1] / self.m
             dW[-1] = np.dot(dZ[-1], A[-1-1].T)/self.m + self.l * self.W[-1]
@@ -263,17 +310,26 @@ class Network:
 
             # 3. Calculate the gradients for the hidden layers backwards.
             for i in range(-2, -len(self.layers), -1):
-                dZ[i] = np.dot(self.W[i+1].T, dZ[i+1]) * self.sigma_derivative(Z[i])
+                dA = np.dot(self.W[i+1].T, dZ[i+1])
+                # NOTE: for non-sigmoid, dA *= D[i] / keep_prob is necessary
+                if D: dA *= D[i] / keep_prob
+                dZ[i] = dA * self.sigma_derivative(Z[i])
                 # dW[i] = np.dot(dZ[i], A[-i-1].T)/self.m + self.l * self.W[i] / self.m
                 dW[i] = np.dot(dZ[i], A[-i-1].T)/self.m + self.l * self.W[i]
                 db[i] = np.sum(dZ[i], axis=1, keepdims=True) / self.m
 
             # 4. Calculate the gradients for the first (input) layer
-            dZ[0] = np.dot(self.W[1].T, dZ[1]) * self.sigma_derivative(Z[0])
-            # dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.W[0] * self.l / self.m
+            # NOTE: for non-sigmoid, dA *= D[i] / keep_prob is necessary
+            dA = np.dot(self.W[1].T, dZ[1])
+            if D: dA *= D[i] / keep_prob
+
+            dZ[0] = dA * self.sigma_derivative(Z[0])
+            dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.W[0] * self.l / self.m
             dW[0] = np.dot(dZ[0], train_X.T)/self.m + self.W[0] * self.l
             db[0] = np.sum(dZ[0], axis=1, keepdims=True) / self.m
 
+
+        # [print("avg(dW[%s]) =" % i, dW_l) for i, dW_l in enumerate(dW)]
         return dW, db
 
     def cost(self, Y_hat, Y):
@@ -298,13 +354,6 @@ class Network:
         return penalty
 
 
-    # def dropout(self, keep_probability):
-    #     """
-    #     Get a mask?
-    #     """
-    #
-    #     mask =
-
 # Utilities
 def cross_entropy(Y_hat, Y):
     """
@@ -318,7 +367,12 @@ def cross_entropy(Y_hat, Y):
     Returns:
         cost: A float - the cross entropy cost for output layer activations.
     """
-    loss = -(Y * np.log(Y_hat) + (1.0 - Y) * np.log(1.0 - Y_hat))
+    # print("Y_hat =", Y_hat)
+    # print("Y_hat.shape =", Y_hat.shape)
+    # loss = -(Y * np.log(Y_hat) + (1.0 - Y) * np.log(1.0 - Y_hat))
+    loss1 = Y * np.log(Y_hat)
+    loss2 = (1.0 - Y) * np.log(1.0 - Y_hat)
+    loss = -(loss1 + loss2)
     cost = np.average(loss)
     return cost
 
@@ -330,3 +384,7 @@ def relu_derivative(Z):
 
 def sigmoid(Z):
     return 1.0 / (1.0 + np.exp(-Z))
+
+def sigmoid_derivative(Z):
+    sigmoid_Z = sigmoid(Z)
+    return sigmoid_Z * (1.0 - sigmoid_Z)
